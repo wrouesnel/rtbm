@@ -162,37 +162,6 @@ class Report( threading.Thread ):
 				
 			time.sleep(cycle_time)
 
-#class Notification():
-#	def __init__( self, server, port, encrypt, origin, username, password, destinations):
-#		self.server = server
-#		self.port = port
-#		self.encrypt = encrypt
-#		self.origin = origin
-#		self.username = username
-#		self.password = password
-#		self.destinations = destinations
-#	
-#	def notifyAdministrators(self):
-#		if self.encrypt == "smtps":
-#			s = smtplib.SMTP_SSL(self.server, self.port)
-#		else:
-#			s = smtplib.SMTP(self.server, self.port)
-#		#s.set_debuglevel(1)
-
-#		if self.encrypt == "starttls":
-#			s.starttls()
-#			
-#		if len(self.username) > 0:
-#			s.login(self.username, self.password)
-
-#		for destination in self.destinations.split(','):
-#			msg = MIMEText("Abuse or congestion on the system")
-#			msg['Subject'] = 'The system needs your attention'
-#			msg['From'] = self.origin
-#			msg['To'] = destination
-#			s.sendmail(self.origin, [destination], msg.as_string())
-#		s.quit()
-
 def usage():
 	print 'Usage: ' + sys.argv[0] + ' --config-file=<path to the file that holds the configuration for rtbm> --pid-file=<the file that will be used to hold the process id of the service>'
 
@@ -228,16 +197,6 @@ def main(argv):
 	stat_file = config.get("general", "stat_file")
 	iface = config.get("general", "iface")
 	cycle_time = float(config.get("general", "cycle_time"))
-	
-	#encrypt = config.get("notifications", "encrypt")
-	#server = config.get("notifications", "server")
-	#port = config.getint("notifications", "port")
-	#origin = config.get("notifications", "origin")
-	#username = config.get("notifications", "username")
-	#password = config.get("notifications", "password")
-	#destinations = config.get("notifications", "destination")
-	
-	#notifications = Notification(server, port, encrypt, origin, username, password, destinations)
 
 	f = open(pid_file, mode='w')
 	f.write(str(os.getpid()))
