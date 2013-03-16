@@ -42,8 +42,19 @@ import signal
 import os
 import ConfigParser
 
+import logging
+from logging import debug, info, warning, error
+
+import netifaces
+
+# used to determine packet destinations
+from netaddr import IPNetwork, IPAddress
+
+# Built-in HTTP server
 import SocketServer
 from SimpleHTTPServer import SimpleHTTPRequestHandler
+
+import collections
 
 protocols={socket.IPPROTO_ICMP:'icmp',
     socket.IPPROTO_TCP:'tcp',
@@ -65,10 +76,11 @@ class PacketDetails:
     def __str__(self):
         return '%s : %s' % (self.address, self.size)
 
-class Counter:
+class PacketCounter:
+    """A thread-safe wrapper of an underlying collections.Counter object"""
     def __init__(self):
         self.lock=thread.allocate_lock()
-        self.counter={}
+        self.counter = collections.Counter()
         self.aggregate=0
     def addPacket(self, packetDetails):
         self.lock.acquire()
@@ -78,17 +90,33 @@ class Counter:
             self.counter[packetDetails.getAddress()] = packetDetails.getSize()
         self.aggregate += packetDetails.getSize()
         self.lock.release()
+    """Returns the internal data members of the counter (the counter object and aggregated size)"""
     def getCounter(self):
         self.lock.acquire()
         counter_copy = self.counter
         aggregate_copy = self.aggregate
-        self.counter={}
+        self.counter=collections.Counter()
         self.aggregate=0
         self.lock.release()
         return (counter_copy, aggregate_copy)
+    """Direct merge the given PC's counter and stats into our one in an additive way
+    This is the same as getCounter, but resets the counter we merge from"""
+    def mergeAndResetCounter(self, otherPacketCounter):
+        self.lock.acquire()
+        otherPacketCounter.lock.acquire()
+        
+        # Merge other counter to this one
+        self.counter.update(otherPacketCounter.counter)    
+        self.aggregate += otherPacketCounter.aggregate
+        
+        # Clear other counter state
+        otherPacketCounter.aggregate=0
+        otherPacketCounter.counter.clear()
+        
+        otherPacketCounter.lock.release()
+        self.lock.release()
     def __str__(self):
         return str(self.counter)
-
 
 #TODO: Add ports information:
 #def decode_tcp_udp_packet(pkt,d):
@@ -114,13 +142,13 @@ class StoppableThread(threading.Thread):
         return self._stop.isSet()    
 
 class Capture( StoppableThread ):
-    def __init__( self, direction ):
+    def __init__( self, iface ):
         super(Capture, self).__init__()
-        self.direction = direction
         self.pc = pcap.pcap(iface, 65535, False)
         #self.pc.setdirection(direction);
         self.pc.setfilter("proto 6 or 17")
-        self.counter = Counter()
+        self.incomingcounter = PacketCounter()
+        self.outgoingcounter = PacketCounter()
 
     def run( self ):
         for ts, pkt in self.pc:
@@ -133,10 +161,13 @@ class Capture( StoppableThread ):
                 decoded=decode_ip_packet(d, pkt[14:])
                 # Assuming this is a TCP/UDP packet, from the filter.
                 #decode_tcp_udp_packet(pkt[4*decoded['header_len']+14:(4*decoded['header_len'])+4+14], decoded)
-                if self.direction == INCOMING:
-                    self.counter.addPacket(PacketDetails(decoded['src'], decoded['size']))
-                elif self.direction == OUTGOING:
-                    self.counter.addPacket(PacketDetails(decoded['dst'], decoded['size']))
+                
+                #debug("Source: %s Dest: %s", decoded['src'], decoded['dst'])
+                
+                # TODO: determine packet direction
+                # TODO: filter the packet for interest
+                self.incomingcounter.addPacket(PacketDetails(decoded['src'], decoded['size']))
+                self.outgoingcounter.addPacket(PacketDetails(decoded['dst'], decoded['size']))
     
     def getStats( self ):
         return self.pc.stats()
@@ -147,36 +178,54 @@ class Report( StoppableThread ):
 
     def run( self ):
         global cycle_time
-        incoming = Capture(INCOMING)
-        incoming.start()
-        outgoing = Capture(OUTGOING)
-        outgoing.start()
-        
+        global ifaces
+
+        # Setup all the PacketCounters here
+        for k in ifaces:
+            ifaces[k] = Capture(k)
+            ifaces[k].start()
+
         while True:
-            (icounter, iaggregated)=incoming.counter.getCounter()
-            (ocounter, oaggregated)=outgoing.counter.getCounter()
+            # Setup some master counters (we merge the other counters into these)
+            # TODO: should these be persisted?
+            icounterMaster = PacketCounter()
+            ocounterMaster = PacketCounter()
+            
+            # Initialize packet count aggregators
+            nrecv = 0
+            ndrop = 0
+            nifdrop = 0
+            
+            # Sum all the individual counters into the master counters
+            for v in ifaces.values():
+                # Merge the counter copies
+                icounterMaster.mergeAndResetCounter(v.incomingcounter)
+                ocounterMaster.mergeAndResetCounter(v.outgoingcounter)
+                # aggregate getstats from the different interfaces
+                a, b, c = v.getStats()
+                nrecv += a
+                ndrop += b
+                nifdrop += c
+            
+            # TODO: separate out the return data per interface, have front end plot it
+            # properly
             f = open(stat_file, mode='w')
             response={}
-            nrecv, ndrop, nifdrop = incoming.getStats()
+            #nrecv, ndrop, nifdrop = (0,0,0) #incoming.getStats()
             response['nifdrop'] = nifdrop
             response['ndrop'] = ndrop
             response['nrecv'] = nrecv
-            nrecv, ndrop, nifdrop = outgoing.getStats()
+            #nrecv, ndrop, nifdrop = (0,0,0) #outgoing.getStats()
             response['nifdrop'] += nifdrop
             response['ndrop'] += ndrop
             response['nrecv'] += nrecv
             response['time'] = time.time()
-            response['outgoing'] = ocounter
-            response['incoming'] = icounter
-            response['iface'] = iface
+            response['outgoing'] = ocounterMaster.counter
+            response['incoming'] = icounterMaster.counter
+            response['iface'] = " ".join(ifaces.keys())
             f.write(cjson.encode(response))
-            f.close()
-                
+            f.close()        
             if self._stop.isSet():
-                incoming.stop()
-                outgoing.stop()
-                incoming.join()
-                outgoing.join()
                 break
             time.sleep(cycle_time)
 
@@ -201,7 +250,7 @@ def main(argv):
     global config_file
     config_file = None
     try:
-        opts, args = getopt.getopt(argv, "c:p:s:h", ["config-file=", "pid-file=", "self-serve=", "help"])
+        opts, args = getopt.getopt(argv, "c:p:s:hd", ["config-file=", "pid-file=", "self-serve=", "help", "debug"])
     except getopt.GetoptError:
         usage()
         sys.exit(-1)
@@ -215,6 +264,12 @@ def main(argv):
             config_file = arg
         elif opt in ("-s", "--self-serve"):
             http_port = int(arg)
+        elif opt in ("-d", "--debug"):
+            logging.basicConfig(level=logging.DEBUG)
+
+    debug("pid_file: %s", pid_file)
+    debug("config_file: %s", config_file)
+    debug("http_port: %s", http_port)
 
     if config_file is None or pid_file is None:
         usage()
@@ -225,11 +280,53 @@ def main(argv):
 
     global stat_file
     global cycle_time
-    global iface
+    global ifaces
+    global local_subnets
+    global ignore_local_machine
+    global show_subnet_usage_only
+    global local_addresses
+    global broadcast_addresses
+    
+    local_subnets = []
+    local_addresses = []
+    broadcast_addresses = []
+    ignore_local_machine = False
+    show_subnet_usage_only = False
+
+    # Read configs
     stat_file = config.get("general", "stat_file")
-    iface = config.get("general", "iface")
     cycle_time = float(config.get("general", "cycle_time"))
-    www_dir = config.get("general", "www_dir")
+    www_dir = config.get("general", "www_dir")    
+    ignore_local_machine = config.getboolean("general", "ignore-local-machine")
+    show_subnet_usage_only = config.getboolean("general", "show-subnet-usage-only")
+    local_subnets = config.get("general", "local-subnets").split(' ')
+
+    info("stat_file: %s", stat_file)
+    info("cycle_time: %s", cycle_time)
+    info("www_dir: %s", www_dir)
+    info("ignore-local-machine: %s", ignore_local_machine)
+    info("show-subnet-usage-only: %s", show_subnet_usage_only)
+    info("local subnets %s" % (local_subnets,))
+
+    # get a list of local ip addresses we need to ignore (include broadcast addresses)
+    for loif in netifaces.interfaces():
+        addresses = netifaces.ifaddresses(loif)
+        if netifaces.AF_INET not in addresses:
+            continue
+        for address in addresses[netifaces.AF_INET]:
+            if "broadcast" in address:
+                broadcast_addresses.append(address["broadcast"])
+            if "addr" in address:
+                local_addresses.append(address["addr"])
+
+    debug("detected local addresses: %s" % (local_addresses,) )
+    debug("detected broadcast addresses: %s" % (broadcast_addresses) )
+
+    # Initialize the dictionary of interface monitoring threads
+    # Dictionary is key = iface, tuple Capture-obj, incoming counter, outgoing counter
+    ifaces = dict((iface, None) for iface in config.get("general", "iface").split(' '))
+
+    debug("iface capture threads spawned: %s" % (ifaces.keys(),) )
 
     f = open(pid_file, mode='w')
     f.write(str(os.getpid()))
@@ -239,6 +336,8 @@ def main(argv):
     report = Report()
     report.start()
 
+    info("report thread started")
+
     # Wait for http_server in main thread, else wait for report thread to end
     http_server = None
     try:
@@ -246,7 +345,7 @@ def main(argv):
             os.chdir(www_dir)  # set current dir to web root
             Handler = InternalHttpServerHandler
             http_server = SocketServer.TCPServer(("", http_port), Handler)
-            print "serving on port %i" % (http_port,)
+            info("serving on port %i" % (http_port,))
             
             http_server.serve_forever()
         else:
