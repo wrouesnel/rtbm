@@ -1,0 +1,53 @@
+<!DOCTYPE HTML>
+<html> 
+	<head> 
+		<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+		<title>RTBM, Real-Time Bandwidth Monitor</title> 
+ 
+		<script type="text/javascript" src="libs/flotr/lib/prototype-1.6.0.2.js"></script> 
+		
+		<!--[if IE]>
+			<script type="text/javascript" src="libs/flotr/lib/excanvas.js"></script>
+			<script type="text/javascript" src="libs/flotr/lib/base64.js"></script>
+			<script type="text/javascript" src="libs/json2.js"></script>
+		<![endif]--> 
+
+		<script type="text/javascript" src="libs/flotr/lib/canvas2image.js"></script> 
+		<script type="text/javascript" src="libs/flotr/lib/canvastext.js"></script> 
+		<script type="text/javascript" src="libs/flotr/flotr-0.2.0-alpha.js"></script> 
+		<script type="text/javascript" src="code.js"></script> 
+		<style type="text/css" media="all">@import "style.css";</style> 
+	</head> 
+	<body> 
+
+<div class="container">
+	<h1>Outgoing connections (listed hosts are downloading)
+	<input type="button" value="Pause" id="graphButton" onClick="talkToGraph()"><br>
+</h1>
+	<div id="outgoing" class="graph"></div>
+	<h1>Incoming connections (listed hosts are uploading)</h1>
+	<div id="incoming" class="graph"></div>
+</div>
+
+<div>
+		<h1>Stats</h1>
+		<div class="stat">
+			<h1>Outgoing full ranking in MegaBytes</h1>
+			<p id="rankingOutgoing"></p>
+		</div>
+		<div class="stat">
+			<h1>Incoming full ranking in MegaBytes</h1>
+			<p id="rankingIncoming"></p>
+		</div>
+
+		<div class="stat">
+			<h1>Deamon stats:</h1>
+			<p>Received packets: <label id="nrecv"></label>
+			<p>Dropped packets: <label id="ndrop"></label>
+			<p>Packets droped by the NIC: <label id="nifdrop"></label>
+		</div>
+</div>
+<p><strong>Note:</strong> Ranking statistics are gathered of the last five minutes of traffic. Daemon statistics are gathered since the deamon started last time.</p>
+
+	</body> 
+</html> 

@@ -1,0 +1,52 @@
+/*
+ *  This file is part of RTBM, Real-Time Bandwidth Monitor.
+ *
+ *  RTBM, Real-Time Bandwidth Monitor is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  RTBM, Real-Time Bandwidth Monitor is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with RTBM, Real-Time Bandwidth Monitor.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+body {
+	margin:0px 0px 0px 0px;
+	}
+
+.stat {
+	float:left;
+	width:30%;
+	border-right:2px solid #000;
+	border-bottom:2px solid #000;
+	margin-right:15px;
+	margin-left:15px;
+	margin-bottom:20px;
+}
+
+div.statContent {
+	margin-left:30px;
+}
+
+div.container {
+	border-bottom:2px solid #000;
+}
+
+h1 {
+	margin:0px 30px 10px 30px;
+	font-size:14px;
+	padding-top:10px;
+}
+
+p {
+	margin:0px 30px 10px 30px;
+}
+
+div.graph{
+	height:250px;
+}
