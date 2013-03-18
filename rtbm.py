@@ -47,9 +47,6 @@ from logging import debug, info, warning, error
 
 import netifaces
 
-# used to determine packet destinations
-from netaddr import IPNetwork, IPAddress
-
 # Built-in HTTP server
 import SocketServer
 from SimpleHTTPServer import SimpleHTTPRequestHandler
@@ -128,6 +125,12 @@ def decode_ip_packet(d,s):
     d['dst']=socket.inet_ntoa(s[16:20])
     return d
 
+def is_addressed_to_here(dst):
+    for addr,netmask in local_addresses:
+        if (dst == addr) or (~netmask & dst == (0xFFFFFFFF & ~netmask)):
+            return True
+    return False
+
 class StoppableThread(threading.Thread):
     """ Thread that can be stopped. Thread must check regularly if it should
     stop"""
@@ -155,19 +158,40 @@ class Capture( StoppableThread ):
             if self._stop.isSet():
                 break
             if pkt is not None:
+                global ignore_local_machine
+                global local_subnets
+                global local_addresses
+                global broadcast_addresses
+                global show_subnet_usage_only
+                
+                # Get the src and destination IP addresses as ints
+                src = struct.unpack("!I", (pkt[14:])[12:16])[0]
+                dst = struct.unpack("!I", (pkt[14:])[16:20])[0]
+                
+                # ignore-local-machine == true ?
+                # ignore packets destined for this machine (this will internet traffic pre-natting, and traffic
+                # destined for this machine).
+                if ignore_local_machine:
+                    if is_addressed_to_here(dst):
+                        continue
+                
+                # determine packet direction
+                # true = outbound
+                # false = inbound
+                direction = False
+                for addr,subnet in local_subnets:
+                    if (addr & subnet) == (src & subnet):
+                        direction = True
+                
+                # We need to decode the packet now before sticking it in a counter
                 d={}
                 d['size']=len(pkt) #length of packet as captured, in bytes
-                #print d['size']
                 decoded=decode_ip_packet(d, pkt[14:])
-                # Assuming this is a TCP/UDP packet, from the filter.
-                #decode_tcp_udp_packet(pkt[4*decoded['header_len']+14:(4*decoded['header_len'])+4+14], decoded)
                 
-                #debug("Source: %s Dest: %s", decoded['src'], decoded['dst'])
-                
-                # TODO: determine packet direction
-                # TODO: filter the packet for interest
-                self.incomingcounter.addPacket(PacketDetails(decoded['src'], decoded['size']))
-                self.outgoingcounter.addPacket(PacketDetails(decoded['dst'], decoded['size']))
+                if direction:
+                    self.outgoingcounter.addPacket(PacketDetails(decoded['src'], decoded['size']))
+                else:
+                    self.incomingcounter.addPacket(PacketDetails(decoded['dst'], decoded['size']))
     
     def getStats( self ):
         return self.pc.stats()
@@ -244,6 +268,9 @@ class InternalHttpServerHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         SimpleHTTPRequestHandler.do_GET(self)
 
+    def log_request(self, message):
+        return
+
 def main(argv):
     global pid_file
     pid_file = None
@@ -299,7 +326,11 @@ def main(argv):
     www_dir = config.get("general", "www_dir")    
     ignore_local_machine = config.getboolean("general", "ignore-local-machine")
     show_subnet_usage_only = config.getboolean("general", "show-subnet-usage-only")
-    local_subnets = config.get("general", "local-subnets").split(' ')
+    
+    for net in config.get("general", "local-subnets").split(' '):
+        addr = struct.unpack("!I", socket.inet_aton(net.split('/')[0]))[0]
+        netmask = struct.unpack("!I", socket.inet_aton(net.split('/')[1]))[0] 
+        local_subnets.append( (addr,netmask) )
 
     info("stat_file: %s", stat_file)
     info("cycle_time: %s", cycle_time)
@@ -313,11 +344,12 @@ def main(argv):
         addresses = netifaces.ifaddresses(loif)
         if netifaces.AF_INET not in addresses:
             continue
+        # TODO: IPv6 support maybe?
         for address in addresses[netifaces.AF_INET]:
-            if "broadcast" in address:
-                broadcast_addresses.append(address["broadcast"])
             if "addr" in address:
-                local_addresses.append(address["addr"])
+                addr = struct.unpack("!I", socket.inet_aton(address["addr"]))[0]
+                netmask = struct.unpack("!I", socket.inet_aton(address["netmask"]))[0]
+                local_addresses.append( (addr, netmask) )
 
     debug("detected local addresses: %s" % (local_addresses,) )
     debug("detected broadcast addresses: %s" % (broadcast_addresses) )
